@@ -23,13 +23,15 @@ pip install -r requirements.txt
 ```
 
 ## Variables de entorno
-Crear un archivo `.env` con las siguientes claves:
+Crear un archivo `.env` con las siguientes claves para uso local:
 
 ```text
 GEMINI_API_KEY=tu_api_key_de_gemini
 TELEGRAM_TOKEN=tu_token_de_bot_telegram
 TELEGRAM_CHAT_ID=chat_id1,chat_id2
 ```
+
+En Streamlit Cloud agrega estas claves en el panel de Secrets del app.
 
 ## Ejecutar la aplicación
 ```powershell

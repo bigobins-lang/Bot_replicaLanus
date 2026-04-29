@@ -12,23 +12,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID_RAW = os.getenv("TELEGRAM_CHAT_ID")
+
+def get_env_var(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name, default)
+    if not value:
+        try:
+            value = st.secrets[name]
+        except Exception:
+            value = default
+    return value
+
+
+GEMINI_API_KEY = get_env_var("GEMINI_API_KEY")
+TELEGRAM_TOKEN = get_env_var("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID_RAW = get_env_var("TELEGRAM_CHAT_ID")
 # Permite múltiples IDs de chat separados por comas
 TELEGRAM_CHAT_IDS = [chat_id.strip() for chat_id in (TELEGRAM_CHAT_ID_RAW.split(',') if TELEGRAM_CHAT_ID_RAW else []) if chat_id.strip()]
 
 if not GEMINI_API_KEY:
-    raise RuntimeError("Falta GEMINI_API_KEY en el archivo .env")
+    raise RuntimeError("Falta GEMINI_API_KEY en el entorno. En Streamlit Cloud agrega el secreto GEMINI_API_KEY en Manage app > Secrets.")
 if not TELEGRAM_CHAT_IDS:
-    raise RuntimeError("Falta TELEGRAM_CHAT_ID en el archivo .env o está vacío. Debe ser uno o más IDs separados por comas.")
+    raise RuntimeError("Falta TELEGRAM_CHAT_ID en el entorno o está vacío. En Streamlit Cloud agrega el secreto TELEGRAM_CHAT_ID en Manage app > Secrets.")
 
 GENAI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 # Nota: Asegúrate de usar un modelo válido como gemini-1.5-flash
 GENAI_MODEL = "gemini-1.5-flash"
-
-# Crear una sesión global para cloudscraper para mejorar el rendimiento
-SCRAPER_SESSION = cloudscraper.create_scraper()
 
 SKILL_PROMPT = """
 Eres un analista de datos deportivos experto.
@@ -60,35 +68,63 @@ def generate_ai_report(prompt: str) -> str:
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "*/*",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "no-cache",
-    "Origin": "https://www.sofascore.com",
     "Referer": "https://www.sofascore.com/",
+    "Origin": "https://www.sofascore.com",
+    "Sec-Fetch-Site": "same-site",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+    "Connection": "keep-alive",
 }
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 
+def create_sofascore_scraper() -> cloudscraper.CloudScraper:
+    scraper = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    )
+    scraper.headers.update(headers)
+    scraper.headers.update({
+        "Accept-Encoding": "gzip, deflate, br",
+        "X-Requested-With": "XMLHttpRequest",
+    })
+    return scraper
+
+
+def fetch_sofascore_url(url: str) -> dict:
+    last_error = None
+    for attempt in range(2):
+        scraper = create_sofascore_scraper()
+        try:
+            response = scraper.get(url, timeout=20)
+            if response.status_code == 403 and attempt == 0:
+                continue
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            last_error = e
+            if hasattr(e, 'response') and getattr(e, 'response', None) is not None:
+                status = e.response.status_code
+                text = e.response.text
+                st.write(f"Intento {attempt + 1}: status={status}, url={url}")
+                if status == 403 and attempt == 0:
+                    continue
+            if attempt == 1:
+                st.error(f"Error de red al obtener datos de SofaScore: {e}")
+    return {}
+
+
 def fetch_sofascore_statistics(event_id: str) -> dict:
     url = f"https://api.sofascore.com/api/v1/event/{event_id}/statistics"
-    try:
-        response = SCRAPER_SESSION.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error de red al obtener estadísticas: {e}")
-        return {}
+    return fetch_sofascore_url(url)
 
 
 def fetch_sofascore_match_info(event_id: str) -> dict:
     url = f"https://api.sofascore.com/api/v1/event/{event_id}"
-    try:
-        response = SCRAPER_SESSION.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error de red al obtener info del partido: {e}")
-        return {}
+    return fetch_sofascore_url(url)
 
 
 def build_stats_summary(event_id: str, datos: dict) -> str:
@@ -371,40 +407,40 @@ def build_recommendation_message(signals: list, metrics: dict, match_info: dict 
     low = [s for s in signals if s[2] < 60]
 
     if high:
-        lines = ["*✅ Recomendaciones con alta probabilidad:*"]
+        lines = ["✅ Recomendaciones con alta probabilidad:"]
         for title, message, score in high:
-            lines.append(f"• *{title}* ({score}%): {message}")
+            lines.append(f"• {title} ({score}%): {message}")
             rec = market_recommendation(title, score, metrics)
             if rec:
-                lines.append(f"  _{rec}_")
+                lines.append(f"  {rec}")
     elif medium:
-        lines = ["*⚠️ Señales de atención:*"]
+        lines = ["⚠️ Señales de atención:"]
         for title, message, score in medium:
-            lines.append(f"• *{title}* ({score}%): {message}")
+            lines.append(f"• {title} ({score}%): {message}")
             rec = market_recommendation(title, score, metrics)
             if rec:
-                lines.append(f"  _{rec}_")
+                lines.append(f"  {rec}")
     else:
-        lines = ["*ℹ️ Actualmente no hay señales de alta probabilidad.*"]
+        lines = ["ℹ️ Actualmente no hay señales de alta probabilidad."]
         for title, message, score in low:
-            lines.append(f"• *{title}* ({score}%): {message}")
+            lines.append(f"• {title} ({score}%): {message}")
         lines.append("\nMantén el seguimiento del partido para tomar decisiones si cambian las estadísticas.")
 
     return "\n".join(lines)
 
 
 def build_telegram_summary(match_id: str, datos: dict, signals: list, match_info: dict | None = None, metrics: dict | None = None) -> str:
-    title_line = f"⚽ *REPORTE DE PARTIDO* ⚽\n"
+    title_line = "⚽ REPORTE DE PARTIDO ⚽\n"
     if match_info and match_info.get("event"):
         home = match_info["event"].get("homeTeam", {}).get("name")
         away = match_info["event"].get("awayTeam", {}).get("name")
         if home and away:
-            title_line = f"⚽ *{home} vs {away}* ⚽\n"
+            title_line = f"⚽ {home} vs {away} ⚽\n"
 
     resumen_stats = (
         title_line +
         f"🆔 ID: {match_id}\n"
-        "📊 *Estadísticas Clave:*\n"
+        "📊 Estadísticas Clave:\n"
     )
 
     if "statistics" in datos and datos["statistics"]:
@@ -413,13 +449,13 @@ def build_telegram_summary(match_id: str, datos: dict, signals: list, match_info
                 if item.get("name") in ["Corner kicks", "Shots on target", "Goals"]:
                     home = item.get("home", "-")
                     away = item.get("away", "-")
-                    resumen_stats += f"🔹 *{item['name']}:* {home} - {away}\n"
+                    resumen_stats += f"🔹 {item['name']}: {home} - {away}\n"
     else:
         resumen_stats += "No hay estadísticas disponibles.\n"
 
     resumen_stats += "\n"
     resumen_stats += build_recommendation_message(signals, metrics or {}, match_info)
-    resumen_stats += "\n\n🚀 _Generado por ADSO Stats Bot_"
+    resumen_stats += "\n\n🚀 Generado por ADSO Stats Bot"
     return resumen_stats
 
 
@@ -432,7 +468,6 @@ def send_telegram_report(text: str) -> list[requests.Response]:
         payload = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }
         try:
