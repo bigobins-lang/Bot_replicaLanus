@@ -2,6 +2,8 @@
 
 Aplicación de Streamlit para análisis de partidos desde SofaScore y generación de reportes con Gemini AI.
 
+Repositorio: https://github.com/bigobins-lang/Bot_replicaLanus
+
 ## Contenido
 - `app.py`: aplicación principal de Streamlit.
 - `requirements.txt`: dependencias necesarias.
