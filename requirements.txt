@@ -1,0 +1,6 @@
+streamlit==1.57.0
+requests==2.33.1
+google-genai==1.74.0
+python-dotenv==1.2.2
+cloudscraper==1.2.71
+
