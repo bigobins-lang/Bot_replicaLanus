@@ -9,6 +9,7 @@ except ImportError:
     st_autorefresh = None
 from google import genai
 from dotenv import load_dotenv
+from urllib.parse import quote
 
 load_dotenv()
 
@@ -26,6 +27,8 @@ def get_env_var(name: str, default: str | None = None) -> str | None:
 GEMINI_API_KEY = get_env_var("GEMINI_API_KEY")
 TELEGRAM_TOKEN = get_env_var("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID_RAW = get_env_var("TELEGRAM_CHAT_ID")
+SOFASCORE_PROXY_URL = get_env_var("SOFASCORE_PROXY_URL")
+SOFASCORE_FALLBACK_PROXY = get_env_var("SOFASCORE_FALLBACK_PROXY", "false").lower() in ("1", "true", "yes")
 
 # Permite múltiples IDs de chat separados por comas. Prioriza el ID de grupo si existe.
 def parse_chat_ids(raw: str | None) -> list[str]:
@@ -96,7 +99,13 @@ headers = {
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 
-def create_sofascore_scraper() -> cloudscraper.CloudScraper:
+def get_proxy_config() -> dict[str, str] | None:
+    if not SOFASCORE_PROXY_URL:
+        return None
+    return {"http": SOFASCORE_PROXY_URL, "https": SOFASCORE_PROXY_URL}
+
+
+def create_sofascore_scraper(proxy_url: str | None = None) -> cloudscraper.CloudScraper:
     scraper = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "mobile": False}
     )
@@ -111,6 +120,9 @@ def create_sofascore_scraper() -> cloudscraper.CloudScraper:
         "sec-ch-ua-platform": '"Windows"',
         "Upgrade-Insecure-Requests": "1",
     })
+    scraper.trust_env = False
+    if proxy_url:
+        scraper.proxies.update({"http": proxy_url, "https": proxy_url})
     return scraper
 
 
@@ -121,15 +133,25 @@ def warm_up_sofascore_session(scraper: cloudscraper.CloudScraper) -> None:
         pass
 
 
+def fetch_json_via_gateway(url: str, gateway_template: str) -> dict:
+    gateway_url = gateway_template.format(encoded_url=quote(url, safe=""))
+    response = requests.get(gateway_url, timeout=25, headers={
+        "User-Agent": headers["User-Agent"],
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.sofascore.com/",
+    })
+    response.raise_for_status()
+    return response.json()
+
+
 def fetch_sofascore_url(url: str) -> dict:
     last_error = None
-    scraper = create_sofascore_scraper()
-    warm_up_sofascore_session(scraper)
-
     api_headers = headers.copy()
     api_headers["Accept"] = "application/json, text/plain, */*"
 
     for attempt in range(3):
+        scraper = create_sofascore_scraper()
+        warm_up_sofascore_session(scraper)
         try:
             response = scraper.get(url, timeout=20, headers=api_headers)
             if response.status_code == 403 and attempt < 2:
@@ -147,11 +169,39 @@ def fetch_sofascore_url(url: str) -> dict:
 
             if response_status == 403 and attempt < 2:
                 st.write(f"Intento {attempt + 1}: status={response_status}, url={url}")
-                warm_up_sofascore_session(scraper)
                 continue
 
             if attempt == 2:
                 st.error(f"Error de red al obtener datos de SofaScore: {e}")
+
+    proxy_url = SOFASCORE_PROXY_URL
+    if proxy_url:
+        try:
+            scraper = create_sofascore_scraper(proxy_url=proxy_url)
+            warm_up_sofascore_session(scraper)
+            response = scraper.get(url, timeout=25, headers=api_headers)
+            response.raise_for_status()
+            st.info("✅ SofaScore data obtained through configured proxy.")
+            return response.json()
+        except Exception as e:
+            last_error = e
+            st.warning(f"⚠️ Proxy sofaScore failed: {e}")
+
+    if SOFASCORE_FALLBACK_PROXY:
+        public_gateways = [
+            "https://thingproxy.freeboard.io/fetch/{encoded_url}",
+            "https://api.allorigins.win/raw?url={encoded_url}",
+        ]
+        for gateway in public_gateways:
+            try:
+                return fetch_json_via_gateway(url, gateway)
+            except Exception as e:
+                last_error = e
+                st.warning(f"⚠️ Fallback proxy gateway failed: {e}")
+
+    if last_error is not None:
+        st.error("❌ No se pudo obtener datos de SofaScore. Intenta reiniciar la app o configura SOFASCORE_PROXY_URL.")
+        st.write(str(last_error))
     return {}
 
 
