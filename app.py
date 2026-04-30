@@ -116,7 +116,7 @@ def create_sofascore_scraper() -> cloudscraper.CloudScraper:
 
 def warm_up_sofascore_session(scraper: cloudscraper.CloudScraper) -> None:
     try:
-        scraper.get("https://www.sofascore.com/", timeout=20)
+        scraper.get("https://www.sofascore.com/", timeout=20, headers=headers)
     except Exception:
         pass
 
@@ -126,9 +126,12 @@ def fetch_sofascore_url(url: str) -> dict:
     scraper = create_sofascore_scraper()
     warm_up_sofascore_session(scraper)
 
+    api_headers = headers.copy()
+    api_headers["Accept"] = "application/json, text/plain, */*"
+
     for attempt in range(3):
         try:
-            response = scraper.get(url, timeout=20)
+            response = scraper.get(url, timeout=20, headers=api_headers)
             if response.status_code == 403 and attempt < 2:
                 st.write(f"Intento {attempt + 1}: status={response.status_code}, url={url}")
                 continue
