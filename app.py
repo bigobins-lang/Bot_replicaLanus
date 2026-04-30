@@ -98,7 +98,7 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 def create_sofascore_scraper() -> cloudscraper.CloudScraper:
     scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "linux", "mobile": False}
+        browser={"browser": "chrome", "platform": "windows", "mobile": False}
     )
     scraper.headers.update(headers)
     scraper.headers.update({
@@ -106,6 +106,10 @@ def create_sofascore_scraper() -> cloudscraper.CloudScraper:
         "X-Requested-With": "XMLHttpRequest",
         "Pragma": "no-cache",
         "DNT": "1",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not A(Brand)";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1",
     })
     return scraper
 
@@ -119,11 +123,10 @@ def warm_up_sofascore_session(scraper: cloudscraper.CloudScraper) -> None:
 
 def fetch_sofascore_url(url: str) -> dict:
     last_error = None
-    for attempt in range(3):
-        scraper = create_sofascore_scraper()
-        if attempt == 0:
-            warm_up_sofascore_session(scraper)
+    scraper = create_sofascore_scraper()
+    warm_up_sofascore_session(scraper)
 
+    for attempt in range(3):
         try:
             response = scraper.get(url, timeout=20)
             if response.status_code == 403 and attempt < 2:
@@ -141,6 +144,7 @@ def fetch_sofascore_url(url: str) -> dict:
 
             if response_status == 403 and attempt < 2:
                 st.write(f"Intento {attempt + 1}: status={response_status}, url={url}")
+                warm_up_sofascore_session(scraper)
                 continue
 
             if attempt == 2:
