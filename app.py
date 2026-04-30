@@ -26,8 +26,22 @@ def get_env_var(name: str, default: str | None = None) -> str | None:
 GEMINI_API_KEY = get_env_var("GEMINI_API_KEY")
 TELEGRAM_TOKEN = get_env_var("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID_RAW = get_env_var("TELEGRAM_CHAT_ID")
-# Permite múltiples IDs de chat separados por comas
-TELEGRAM_CHAT_IDS = [chat_id.strip() for chat_id in (TELEGRAM_CHAT_ID_RAW.split(',') if TELEGRAM_CHAT_ID_RAW else []) if chat_id.strip()]
+
+# Permite múltiples IDs de chat separados por comas. Prioriza el ID de grupo si existe.
+def parse_chat_ids(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    ids = []
+    for chat_id in raw.split(","):
+        normalized = chat_id.strip().strip('"').strip("'")
+        if normalized:
+            ids.append(normalized)
+    return ids
+
+TELEGRAM_CHAT_IDS = parse_chat_ids(TELEGRAM_CHAT_ID_RAW)
+TELEGRAM_GROUP_CHAT_IDS = [chat_id for chat_id in TELEGRAM_CHAT_IDS if chat_id.startswith("-100")]
+if TELEGRAM_GROUP_CHAT_IDS:
+    TELEGRAM_CHAT_IDS = TELEGRAM_GROUP_CHAT_IDS
 
 if not GEMINI_API_KEY:
     raise RuntimeError("Falta GEMINI_API_KEY en el entorno. En Streamlit Cloud agrega el secreto GEMINI_API_KEY en Manage app > Secrets.")
