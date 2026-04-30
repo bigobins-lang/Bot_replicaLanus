@@ -98,35 +98,52 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 def create_sofascore_scraper() -> cloudscraper.CloudScraper:
     scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        browser={"browser": "chrome", "platform": "linux", "mobile": False}
     )
     scraper.headers.update(headers)
     scraper.headers.update({
         "Accept-Encoding": "gzip, deflate, br",
         "X-Requested-With": "XMLHttpRequest",
+        "Pragma": "no-cache",
+        "DNT": "1",
     })
     return scraper
 
 
+def warm_up_sofascore_session(scraper: cloudscraper.CloudScraper) -> None:
+    try:
+        scraper.get("https://www.sofascore.com/", timeout=20)
+    except Exception:
+        pass
+
+
 def fetch_sofascore_url(url: str) -> dict:
     last_error = None
-    for attempt in range(2):
+    for attempt in range(3):
         scraper = create_sofascore_scraper()
+        if attempt == 0:
+            warm_up_sofascore_session(scraper)
+
         try:
             response = scraper.get(url, timeout=20)
-            if response.status_code == 403 and attempt == 0:
+            if response.status_code == 403 and attempt < 2:
+                st.write(f"Intento {attempt + 1}: status={response.status_code}, url={url}")
                 continue
             response.raise_for_status()
             return response.json()
         except Exception as e:
             last_error = e
-            if hasattr(e, 'response') and getattr(e, 'response', None) is not None:
-                status = e.response.status_code
-                text = e.response.text
-                st.write(f"Intento {attempt + 1}: status={status}, url={url}")
-                if status == 403 and attempt == 0:
-                    continue
-            if attempt == 1:
+            response_status = None
+            try:
+                response_status = getattr(e, "response", None).status_code
+            except Exception:
+                pass
+
+            if response_status == 403 and attempt < 2:
+                st.write(f"Intento {attempt + 1}: status={response_status}, url={url}")
+                continue
+
+            if attempt == 2:
                 st.error(f"Error de red al obtener datos de SofaScore: {e}")
     return {}
 
